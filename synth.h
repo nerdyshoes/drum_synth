@@ -64,25 +64,36 @@ typedef struct {
     int16_t prev_input;
 } LowPassFilter;
 
-#define SEQUENCER_STEPS 8
 
 
-typedef struct {
-    uint8_t current_step;
-    int16_t gate_output;
-    int16_t trigger_output;
-    uint32_t timer;
-    int32_t samples_per_beat;
-    int16_t gate_length; //a percentage from 0-32767
-    int32_t gate_samples;
-} Sequencer;
 
 
-extern Oscillator osc;  // Declare external variables
+
+
+extern ADSR envelope;
+
+extern Oscillator osc;  // Define the variables
 extern ADSR amp_env;
 extern ADSR pitch_env;
+extern Filter hpf;
 
 
-int16_t generate_sample(int16_t *adcValues, int16_t adcValues_size);
-void setup();
+extern ADSR amp_env_snare;
+extern ADSR pitch_env_snare;
+extern Oscillator osc_snare;
+
+extern Filter hpf_hihat;
+extern ADSR amp_env_hihat;
+
+
+
+
+
+int16_t setup();
+void adsr_trigger(ADSR* env);
+void adsr_release(ADSR* env);
+int16_t adsr_process(ADSR* env);
+int16_t oscillator_sine_next_sample(Oscillator* osc, int16_t mod_value);
+int16_t white_noise();
+int16_t filter_process(Filter* filter, int16_t sample_in);
 #endif // SYNTH_H

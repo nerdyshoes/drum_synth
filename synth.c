@@ -1,15 +1,10 @@
-// start oscillator at 60 hz, pitch spikes up then decays
-// attack 1 ms, 20ms decay roughly
-
-
-
-
-
-
-
+//main synthesiser, the building blocks for the instruments
 
 
 #include "synth.h"
+#include "instruments.h"
+#include "sequencer.h"
+
 #include "math.h"
 #include <stdio.h>
 #include <stdint.h>
@@ -28,12 +23,11 @@
 
 static int16_t sine_table[SINE_TABLE_SIZE];
 
-int8_t bool_setup = 0;
+
+
 
 ADSR envelope;
 
-static Oscillator modulator = { .phase = 0, .frequency = 1, .mod_percentage=32767 };
-static Oscillator carrier;
 Oscillator osc;  // Define the variables
 ADSR amp_env;
 ADSR pitch_env;
@@ -48,7 +42,6 @@ Filter hpf_hihat;
 ADSR amp_env_hihat;
 
 
-Sequencer seq;
 
 #include "main.h"  // Ensures HAL and peripheral declarations are included
 
@@ -99,7 +92,6 @@ int16_t filter_process(Filter* filter, int16_t sample_in) {
 
 
 void generate_sine_table() {
-	bool_setup = 1;
     for (int i = 0; i < SINE_TABLE_SIZE; i++) {
         float angle = (2.0f * M_PI * i) / SINE_TABLE_SIZE;
         sine_table[i] = (int16_t)(sinf(angle) * SINE_AMPLITUDE);
@@ -306,303 +298,16 @@ void adsr_release(ADSR* env) {
     }
 }
 
-void kick_init(Oscillator* osc, ADSR* amp_env, ADSR* pitch_env) {
 
-    osc->phase = 0;
-    osc->frequency = 60; // Initial frequency
-    osc->mod_percentage = 32767;
 
-    adsr_trigger(amp_env);
-    adsr_trigger(pitch_env);
 
 
-}
-void kick_trigger(Oscillator* osc, ADSR* amp_env, ADSR* pitch_env) {
-    osc->phase = 0;
-    osc->frequency = 60; // Initial frequency
 
-    adsr_trigger(amp_env);
-    adsr_trigger(pitch_env);
 
-}
-void kick_release(Oscillator* osc, ADSR* amp_env, ADSR* pitch_env) {
 
-    adsr_release(amp_env);
-    adsr_release(pitch_env);
 
-}
 
-int16_t kick_process(Oscillator* osc, ADSR* amp_env, ADSR* pitch_env) {
-    // Process amplitude envelope
-    int16_t amp_gain = adsr_process(amp_env);
-
-
-    // Process pitch envelope (use it as frequency modulation amount)
-    int16_t fm_amount = adsr_process(pitch_env);
-
-    // Generate oscillator sample with frequency modulation
-    int16_t sample = oscillator_sine_next_sample(osc, fm_amount);
-
-    // Apply amplitude envelope
-//    printf("amp gain:%i\r\n", amp_gain);
-//    if (amp_gain != 0) {
-//    	char buffer[50];
-//		snprintf(buffer, sizeof(buffer), "amp gain:%i\r\n", amp_gain);
-//		HAL_UART_Transmit(&huart2, (uint8_t*)buffer, strlen(buffer), 10);
-//    }
-
-
-//    return amp_gain;
-    return (int16_t)(((int32_t)sample * (int32_t)amp_gain) >> 15);
-
-
-    // return sample;
-    // return amp_gain;
-    // return fm_amount;
-}
-
-
-
-void snare_init(ADSR* amp_env) {
-
-    adsr_trigger(amp_env);
-
-
-}
-void snare_trigger(ADSR* amp_env) {
-
-    adsr_trigger(amp_env);
-
-
-}
-void snare_release(ADSR* amp_env) {
-
-    adsr_release(amp_env);
-
-}
-
-int16_t snare_process(ADSR* amp_env, Filter* hpf) {
-	int16_t amp_gain = adsr_process(amp_env);
-
-	int16_t sample = white_noise();
-	int16_t gain_sample = ((int32_t)(amp_gain * sample) >> 15);
-//	printf("amp_gain: %d\n", amp_gain);
-	int16_t filtered_noise = filter_process(hpf, gain_sample);
-    return filtered_noise;
-}
-
-
-
-int16_t hihat_process(ADSR* amp_env, Filter* hpf) {
-	int16_t amp_gain = adsr_process(amp_env);
-
-	int16_t sample = white_noise();
-
-	int16_t gain_sample = ((int32_t)(amp_gain * sample) >> 15);
-
-	int16_t filtered_noise = filter_process(hpf, gain_sample);
-
-    return filtered_noise;
-}
-
-
-void hihat_init(ADSR* amp_env) {
-	adsr_trigger(amp_env);
-}
-
-void hihat_trigger(ADSR* amp_env) {
-    adsr_trigger(amp_env);
-}
-
-void hihat_release(ADSR* amp_env) {
-
-    adsr_release(amp_env);
-
-}
-
-
-
-
-
-
-#define SEQUENCER_STEPS 8
-
-
-void sequencer_init(Sequencer* seq, double bpm) {
-
-	if (bpm == 0) {
-	    printf("Error: BPM must be greater than 0!\n");
-	    return; // Exit function early
-	}
-    double seconds_per_beat = 60/bpm;
-    seq->samples_per_beat = (int32_t)(SAMPLE_RATE * seconds_per_beat);
-
-    seq->current_step = 0;
-    seq->gate_output = 0;
-    seq->trigger_output = 0;
-    seq->timer = 0;
-    seq->gate_length = (int16_t)(32767 * 0.75); //75% of the full beat the gate is on
-    seq->gate_samples = (seq->samples_per_beat * (int32_t)seq->gate_length) >> 15;
-
-
-}
-
-
-void sequencer_tick(Sequencer* seq) {
-    // returns seq->current_step, seq->gate_output, seq->trigger_output
-//	printf("seq->timer: %li, seq->gate_samples: %li\n", seq->timer, seq->gate_samples);
-	if (seq->samples_per_beat == 0) {
-		return;
-	}
-//	printf("samples_per_beat: %li \n", seq->samples_per_beat);
-//	printf("gate_samples: %li\n", seq->gate_samples);
-//	printf("timer: %ld, gate_samples: %ld\r\n", seq->timer, seq->gate_samples);
-	if (seq->timer == 0){
-	    seq->trigger_output = 32767;
-	    seq->gate_output = 32767;
-	}
-	else if (seq->timer < seq->gate_samples) {
-//		printf("hewwo\n");
-		seq->gate_output = 32767;
-		seq->trigger_output = 0;
-	}
-    else if (seq->timer == seq->gate_samples) {
-        seq->trigger_output = -32767;
-        seq->gate_output = 0;
-    }
-    else if (seq->timer >= seq->samples_per_beat) {
-
-        seq->current_step = (seq->current_step + 1)%SEQUENCER_STEPS;
-        seq->timer = 0;
-        return;
-    }
-    else if (seq->timer > seq->gate_samples) {
-        seq->trigger_output = 0;
-    }
-
-
-
-
-    seq->timer++;
-}
-
-
-
-
-
-
-
-int16_t snare_drum_sample(int16_t gate_output, int16_t trigger_output){
-	int16_t sample = 0;
-	// if trigger, initialise the kick drum
-	if (trigger_output > 0) {
-		snare_trigger(&amp_env_snare);
-	}
-	else if (trigger_output < 0) {
-		snare_release(&amp_env_snare);
-	}
-	if (gate_output > 0) {
-		sample = snare_process(&amp_env_snare, &hpf);
-	}
-
-	return sample;
-}
-
-
-
-int16_t kick_drum_sample(int16_t gate_output, int16_t trigger_output) {
-	int16_t sample = 0;
-	// if trigger, initialise the kick drum
-	if (trigger_output > 0) {
-		kick_trigger(&osc, &amp_env, &pitch_env);
-	}
-	else if (trigger_output < 0) {
-		kick_release(&osc, &amp_env, &pitch_env);
-	}
-	if (gate_output > 0) {
-		sample = kick_process(&osc, &amp_env, &pitch_env);
-	}
-
-	return sample;
-}
-
-int16_t hihat_sample(int16_t gate_output, int16_t trigger_output) {
-	int16_t sample = 0;
-
-	if (trigger_output > 0) {
-		hihat_trigger(&amp_env_hihat);
-	}
-	else if (trigger_output < 0) {
-		hihat_release(&amp_env_hihat);
-	}
-	if (gate_output > 0) {
-		sample = hihat_process(&amp_env_hihat, &hpf_hihat);
-	}
-	return sample;
-}
-
-
-int16_t step_0(int16_t gate_output, int16_t trigger_output) {
-	int16_t sample = 0;
-	sample = kick_drum_sample(gate_output, trigger_output);
-//	sample += snare_drum_sample(gate_output, trigger_output) >> 2;
-	return sample;
-}
-
-int16_t step_1(int16_t gate_output, int16_t trigger_output) {
-	int16_t sample = 0;
-	sample = kick_drum_sample(gate_output, trigger_output);
-//	sample += snare_drum_sample(gate_output, trigger_output) >> 2;
-//	sample += hihat_sample(gate_output, trigger_output) >> 2;
-	return sample;
-}
-
-int16_t step_2(int16_t gate_output, int16_t trigger_output) {
-	int16_t sample = 0;
-	sample = hihat_sample(gate_output, trigger_output);
-	return sample;
-}
-
-int16_t step_3(int16_t gate_output, int16_t trigger_output) {
-	int16_t sample = 0;
-	sample = kick_drum_sample(gate_output, trigger_output);
-
-
-//	sample = kick_drum_sample(gate_output, trigger_output);
-//	sample = ((int32_t)gate_output * (int32_t)oscillator_sine_next_sample(&carrier, 0)) >> 15;
-//	sample = white_noise();
-//	sample = snare_drum_sample(gate_output, trigger_output) >> 1;
-
-//	sample += hihat_sample(gate_output, trigger_output) >> 2;
-	return sample;
-}
-int16_t step_4(int16_t gate_output, int16_t trigger_output) {
-	int16_t sample = 0;
-	sample = kick_drum_sample(gate_output, trigger_output);
-//	sample += hihat_sample(gate_output, trigger_output) >> 2;
-	return sample;
-}
-int16_t step_5(int16_t gate_output, int16_t trigger_output) {
-	int16_t sample = 0;
-	sample = kick_drum_sample(gate_output, trigger_output);
-	return sample;
-}
-int16_t step_6(int16_t gate_output, int16_t trigger_output) {
-	int16_t sample = 0;
-	sample = snare_drum_sample(gate_output, trigger_output);
-//	sample += hihat_sample(gate_output, trigger_output) >> 2;
-
-	return sample;
-}
-int16_t step_7(int16_t gate_output, int16_t trigger_output) {
-	int16_t sample = 0;
-	sample = snare_drum_sample(gate_output, trigger_output) >> 1;
-	return sample;
-}
-
-
-
-void setup() {
+int16_t setup() {
 	printf("setup starting\n");
 
 
@@ -618,12 +323,11 @@ void setup() {
 
 
 
-    sequencer_init(&seq, 200);
+    sequencer_init();
 
     adsr_init(&amp_env_snare, 0.01217, 0.001, 0, 0.010);
 
-    kick_init(&osc, &amp_env, &pitch_env);
-    snare_init(&amp_env_snare);
+    setup_instruments();
 
     filter_init(&hpf, HIGH, 1062, 0.707f);
 
@@ -637,85 +341,9 @@ void setup() {
 
 
     printf("setup complete.\n");
-
-    carrier.phase = 0;
-    carrier.frequency = 400;
-    bool_setup = 2;
-
-
+    return 1;
 }
 
 
 
-int16_t generate_sample(int16_t *adc_values, int16_t adc_values_size) {
-    if (bool_setup != 2) {
-//        printf("Warning: sequencer2_init() not run yet!\n");
-        return 0;  // Prevent uninitialized access
-    }
 
-
-    int16_t volume = adc_values[3] << 3;
-
-
-//    int16_t bass_pitch_mod = (int16_t)(adc_values[0] / 4095.0 * 70 + 50);
-//    osc.frequency = bass_pitch_mod;
-//    osc.frequency = 80;
-
-
-
-
-
-
-	int16_t sample = 0;
-	sequencer_tick(&seq);
-
-
-//	sequencer
-	switch (seq.current_step) {
-		case 0:
-			sample = step_0(seq.gate_output, seq.trigger_output);
-			break;
-
-		case 1:
-			sample = step_1(seq.gate_output, seq.trigger_output);
-			break;
-
-		case 2:
-			sample = step_2(seq.gate_output, seq.trigger_output);
-			break;
-
-		case 3:
-			sample = step_3(seq.gate_output, seq.trigger_output);
-			break;
-		case 4:
-			sample = step_4(seq.gate_output, seq.trigger_output);
-			break;
-		case 5:
-			sample = step_5(seq.gate_output, seq.trigger_output);
-			break;
-		case 6:
-			sample = step_6(seq.gate_output, seq.trigger_output);
-			break;
-		case 7:
-			sample = step_7(seq.gate_output, seq.trigger_output);
-			break;
-	}
-
-
-
-
-
-
-
-//	if (sample != 0) {
-//		printf("sample: %d, current_step: %d\r\n", sample, seq.current_step);
-//	}
-
-	//mixer
-
-
-//	sample = oscillator_sine_next_sample(&osc, 0);
-//	sample = 0;
-	return sample;
-//	return (int32_t)(sample*volume) >> 15;
-}
