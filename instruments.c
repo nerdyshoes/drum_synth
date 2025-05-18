@@ -123,7 +123,7 @@ void hihat_release(ADSR* amp_env) {
 }
 
 
-int16_t snare_drum_sample(int16_t gate_output, int16_t trigger_output){
+int16_t snare_sample(int16_t gate_output, int16_t trigger_output){
 	int16_t sample = 0;
 	// if trigger, initialise the kick drum
 	if (trigger_output > 0) {
@@ -141,7 +141,7 @@ int16_t snare_drum_sample(int16_t gate_output, int16_t trigger_output){
 
 
 
-int16_t kick_drum_sample(int16_t gate_output, int16_t trigger_output) {
+int16_t kick_sample(int16_t gate_output, int16_t trigger_output) {
 	int16_t sample = 0;
 	// if trigger, initialise the kick drum
 	if (trigger_output > 0) {

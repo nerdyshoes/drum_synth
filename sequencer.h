@@ -11,6 +11,9 @@ typedef struct {
     int32_t gate_samples;
 } Sequencer;
 
+typedef struct {
+	uint8_t prev_state;
+} Button;
 
 int16_t generate_sample(int16_t *adcValues, int16_t adcValues_size);
 void sequencer_init();
