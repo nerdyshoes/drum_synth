@@ -17,7 +17,7 @@
 #define SAMPLE_RATE 48000
 #define FIXED_POINT_SHIFT 16
 #define FIXED_POINT_ONE (1 << FIXED_POINT_SHIFT)
-#define SINE_AMPLITUDE (1 << 15) // Q1.15 format
+#define SINE_AMPLITUDE 32765
 
 #define ADSR_WAVETABLE_SIZE 1024
 
@@ -41,7 +41,14 @@ Oscillator osc_snare;
 Filter hpf_hihat;
 ADSR amp_env_hihat;
 
+Filter bpf_clap;
+ADSR amp_env_clap;
+ADSR filter_env_clap;
 
+Filter bpf_cowbell;
+ADSR amp_env_cowbell;
+Oscillator osc_cowbell_1;
+Oscillator osc_cowbell_2;
 
 #include "main.h"  // Ensures HAL and peripheral declarations are included
 
@@ -51,6 +58,8 @@ extern UART_HandleTypeDef huart2;  // Declares that huart2 is defined elsewhere
 int16_t white_noise() {
     return (rand() % 65535) - 32767;
 }
+
+
 void filter_init(Filter* filter, FilterPassType type, int16_t cutoff_frequency, float q) {
 	float f_float = 2.0f * sinf(M_PI * cutoff_frequency / SAMPLE_RATE); // normalized
 	filter->f = (int16_t)(f_float * Q15_ONE);
@@ -89,7 +98,41 @@ int16_t filter_process(Filter* filter, int16_t sample_in) {
     }
 
 }
+int16_t filter_process_freqmod(Filter* filter, int16_t sample_in, int16_t mod_value) {
 
+	// mod_value is between -32767,32767
+
+	int16_t f = filter->f + (((int32_t)filter->f * (int32_t)mod_value)>>15);
+
+    // Use int32_t for intermediate values to avoid overflow
+    int32_t high = (int32_t)sample_in - filter->low - ((int32_t)filter->q * filter->band >> Q15_SHIFT);
+    int32_t band = (int32_t)filter->band + ((int32_t)f * high >> Q15_SHIFT);
+    int32_t low  = (int32_t)filter->low  + ((int32_t)f * band >> Q15_SHIFT);
+
+    // Saturate to Q15 range
+    if (band > INT16_MAX) band = INT16_MAX;
+    else if (band < INT16_MIN) band = INT16_MIN;
+
+    if (low > INT16_MAX) low = INT16_MAX;
+    else if (low < INT16_MIN) low = INT16_MIN;
+
+    // Update internal state
+    filter->band = (int16_t)band;
+    filter->low = (int16_t)low;
+
+    // Return the selected output
+    switch (filter->type) {
+        case LOW:
+            return filter->low;
+        case HIGH:
+            return (int16_t)high;
+        case BANDPASS:
+            return filter->band;
+        default:
+            return 0;
+    }
+
+}
 
 void generate_sine_table() {
     for (int i = 0; i < SINE_TABLE_SIZE; i++) {
@@ -118,6 +161,9 @@ int16_t oscillator_sine_next_sample(Oscillator* osc, int16_t mod_value) {
     osc->phase += phase_increment;
 //    printf("%d", waveform_sine(osc->phase));
     return waveform_sine(osc->phase);
+
+//    return osc->phase >> 16;
+
 }
 
 int16_t vca(int16_t input, int16_t gain) {
@@ -138,7 +184,17 @@ void fill_attack(ADSR* env) {
 }
 
 int16_t get_attack(ADSR* env, float attack_progress) {
-	int16_t index = (int16_t)(attack_progress * ADSR_WAVETABLE_SIZE);
+	// attack progress is float between 0-1
+	int16_t index;
+	if (attack_progress < 0){
+		return 0;
+	}
+	if (attack_progress >= 1) {
+		index = ADSR_WAVETABLE_SIZE - 1;
+	}
+	else {
+		index = (int16_t)(attack_progress * ADSR_WAVETABLE_SIZE);
+	}
 
 	return env->attack_wavetable[index];
 }
@@ -151,10 +207,13 @@ void print_attack(ADSR* env) {
 
 void fill_decay(ADSR* env) {
 
-	float base = 1 - 1/env->scale;
+//	float base = 1 - 1/env->scale;
 
     for (uint32_t i=0; i<ADSR_WAVETABLE_SIZE; i++) {
-    	float curve = env->A * (env->scale * (1 - pow(base, (float)i/(float)ADSR_WAVETABLE_SIZE)) + 1 - env->scale);
+    	float curve_inner = env->scale * pow(1 - 1/env->scale, (float)i/(float)ADSR_WAVETABLE_SIZE) + 1 - env->scale;
+    	float curve = curve_inner * env->A;
+//    	float curve = env->A * ((1 - ))
+//    	float curve = env->A * (env->scale * (1 - pow(base, (float)i/(float)ADSR_WAVETABLE_SIZE)) + 1 - env->scale);
         env->decay_wavetable[i] = (int16_t)curve;
     }
 }
@@ -162,7 +221,7 @@ void fill_decay(ADSR* env) {
 int16_t get_decay(ADSR* env, float attack_progress) {
 	int16_t index = (int16_t)(attack_progress * ADSR_WAVETABLE_SIZE);
 	int16_t table_value =  env->decay_wavetable[index];
-	return ((int32_t)(table_value * (32767 - env->s_int16)) >> 15 ) + ((int32_t)(32767*env->s_int16) >> 15);
+	return ((int32_t)(table_value * (32767 - env->s_int16)) >> 15 ) + env->s_int16;
 }
 
 void fill_release(ADSR* env) {
@@ -170,13 +229,14 @@ void fill_release(ADSR* env) {
 	float base = 1 - 1/env->scale;
 
     for (uint32_t i=0; i<ADSR_WAVETABLE_SIZE; i++) {
-    	float curve = env->A * (env->scale * (1 - pow(base, (float)i/(float)ADSR_WAVETABLE_SIZE)) - env->scale + 1);
+    	float exponent = (float)i/(float)ADSR_WAVETABLE_SIZE;
+    	float curve = env->A * (env->scale * pow(base, exponent) - env->scale + 1);
         env->release_wavetable[i] = (int16_t)curve;
     }
 }
 
-int16_t get_release(ADSR* env, float attack_progress) {
-	int16_t index = (int16_t)(attack_progress * ADSR_WAVETABLE_SIZE);
+int16_t get_release(ADSR* env, float release_progress) {
+	int16_t index = (int16_t)(release_progress * ADSR_WAVETABLE_SIZE);
 
 	return (int32_t)(env->release_wavetable[index] * env->s_int16) >> 15;
 }
@@ -188,7 +248,7 @@ void adsr_init(ADSR* env, double a_time, double d_time, double s_level, double r
     env->release_time = r_time;
     env->s_int16 = (int16_t)(env->s*32767);
 
-    env->max_sustain_time = 0.001;
+    env->max_sustain_time = 0.1;
 
     env->attack_samples = (uint32_t)(env->attack_time * SAMPLE_RATE);
     env->decay_samples = (uint32_t)(env->decay_time * SAMPLE_RATE);
@@ -203,11 +263,8 @@ void adsr_init(ADSR* env, double a_time, double d_time, double s_level, double r
     env->state = ATTACK;
 
     env->scale = 1.05;
-    env->a = -log(1 - 1/env->scale) / env->attack_time;
     env->A = 32767;
-    env->s_lower = env->s - env->scale + 1;
-    env->d = -log((env->scale - 1)/(1 - env->s_lower)) / env->decay_time;
-    env->r = -log(1 - 1/env->scale)/env->release_time;
+
 
 
 
@@ -241,7 +298,7 @@ void adsr_init(ADSR* env, double a_time, double d_time, double s_level, double r
 
          case DECAY:
              // printf("DECAY\n");
-        	 env->gain = get_decay(env, (float)env->timer / (float)env->attack_samples);
+        	 env->gain = get_decay(env, (float)env->timer / (float)env->decay_samples);
         	 env->timer += 1;
 
              if (env->timer >= env->decay_samples) {
@@ -265,7 +322,7 @@ void adsr_init(ADSR* env, double a_time, double d_time, double s_level, double r
 
          case RELEASE:
              // printf("RELEASE\n");
-        	 env->gain = get_release(env, (float)env->timer / (float)env->attack_samples);
+        	 env->gain = get_release(env, (float)env->timer / (float)env->release_samples);
         	 env->timer += 1;
 
              if (env->timer >= env->release_samples) {
@@ -315,7 +372,7 @@ int16_t setup() {
     generate_sine_table();
 
 
-    adsr_init(&amp_env, 0.006, 0.005, 0, 0.0072);
+    adsr_init(&amp_env, 0.010, 0.005, 0, 0.0072);
 
 
     adsr_init(&pitch_env, 0.005, 0.0816, 0, 0.007);
@@ -334,9 +391,17 @@ int16_t setup() {
 //    print_sine_table();
 
 
-    adsr_init(&amp_env_hihat, 0.001, 0.001, 0, 0.005);
+    adsr_init(&amp_env_hihat, 0.002, 0.002, 0, 0.005);
     filter_init(&hpf_hihat, HIGH, 3258, 0.707f);
 
+
+    filter_init(&bpf_clap, BANDPASS, 330, 0.707f);
+    adsr_init(&amp_env_clap, 0.001, 0.005, 0, 0);
+    adsr_init(&filter_env_clap, 0.001, 0.050, 0.3, 0.010);
+
+
+    filter_init(&bpf_cowbell, BANDPASS, 300, 0.707);
+    adsr_init(&amp_env_cowbell, 0.0001, 0.0001, 0.1, 0.005);
 
 
 

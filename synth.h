@@ -5,6 +5,8 @@
 #define SINE_TABLE_SIZE 1024
 #define ADSR_WAVETABLE_SIZE 1024
 
+
+
 // Oscillator structure
 typedef struct Oscillator {
     uint32_t phase;       // Phase accumulator
@@ -69,7 +71,6 @@ typedef struct {
 
 
 
-
 extern ADSR envelope;
 
 extern Oscillator osc;  // Define the variables
@@ -85,6 +86,15 @@ extern Oscillator osc_snare;
 extern Filter hpf_hihat;
 extern ADSR amp_env_hihat;
 
+extern Filter bpf_clap;
+extern ADSR amp_env_clap;
+extern ADSR filter_env_clap;
+
+extern Filter bpf_cowbell;
+extern ADSR amp_env_cowbell;
+extern Oscillator osc_cowbell_1;
+extern Oscillator osc_cowbell_2;
+
 
 
 
@@ -96,4 +106,5 @@ int16_t adsr_process(ADSR* env);
 int16_t oscillator_sine_next_sample(Oscillator* osc, int16_t mod_value);
 int16_t white_noise();
 int16_t filter_process(Filter* filter, int16_t sample_in);
+int16_t filter_process_freqmod(Filter* filter, int16_t sample_in, int16_t f);
 #endif // SYNTH_H
