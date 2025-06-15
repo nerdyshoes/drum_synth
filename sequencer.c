@@ -16,6 +16,27 @@ Button button3;
 Button button4;
 Button button5;
 
+int32_t sequence[2048] = {0};
+
+#define MAX_EVENTS 512
+uint8_t  seq_instr[MAX_EVENTS];   // 0 = no sound, 1 = kick, 2 = snare, etc.
+uint32_t seq_len   [MAX_EVENTS];   // length of that event in samples
+
+
+uint16_t set_bit(uint16_t val, uint8_t pos, int bit) {
+    if (pos > 15) return val; // Out-of-range bit positions are ignored
+    if (bit)
+        return val | (1 << pos);     // Set bit at position `pos`
+    else
+        return val & ~(1 << pos);    // Clear bit at position `pos`
+}
+
+uint8_t read_bit(uint32_t val, uint8_t pos) {
+    if (pos > 31) return 0;  // prevent undefined behavior
+    return (val >> pos) & 1;
+}
+
+
 void sequencer_init() {
 
 	double bpm = 200;
@@ -110,145 +131,217 @@ int16_t sequencer_generate() {
 	return sample;
 }
 
+void read_buttons(uint16_t *button_state, int16_t size) {
 
+
+	button_state[0] = set_bit(button_state[0], 0, !HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_6));
+	button_state[1] = set_bit(button_state[1], 1, !HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_7));
+	button_state[2] = set_bit(button_state[2], 2, !HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_9));
+	button_state[3] = set_bit(button_state[3], 3, !HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8));
+
+}
+
+
+event_count = 0;
 int32_t synth_from_button() {
 
+
+
+	static uint16_t count = 0;
+	static uint16_t seq_index = 0;
+	uint16_t button_state[4] = {0};
+
+	int8_t currently_recording = 0;
+	if (count == 200) {
+
+
+		count = 0;
+		seq_index += 1;
+
+		if (seq_index == 2048) {
+			seq_index = 0;
+		}
+
+		if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_10) == 0) {
+			// recording, BUTTON iS ON
+			currently_recording = 1;
+		}
+
+	}
+
+
+
+	read_buttons(button_state, 4);
+
+	int16_t gate_kick_seq = read_bit(sequence[seq_index], 0) * 32767;
+	int16_t gate_snare_seq = read_bit(sequence[seq_index], 1) * 32767;
+	int16_t gate_hihat_seq = read_bit(sequence[seq_index], 2) * 32767;
+	int16_t gate_clap_seq = read_bit(sequence[seq_index], 3) * 32767;
+
+	int16_t trigger_kick_seq = 0;
+	int16_t trigger_snare_seq = 0;
+	int16_t trigger_hihat_seq = 0;
+	int16_t trigger_clap_seq = 0;
+
+	int16_t prev_seq_index;
+	if (seq_index == 0) {
+		prev_seq_index = 2047;
+	}
+	else {
+		prev_seq_index = seq_index - 1;
+	}
+
+
+	if (count == 0) {
+		//only trigger when count=0 to ensure no multiple triggers
+		if (gate_kick_seq && !read_bit(sequence[prev_seq_index], 0)) {
+			trigger_kick_seq = 32767;
+		}
+		else if (!gate_kick_seq && read_bit(sequence[prev_seq_index], 0)) {
+			trigger_kick_seq = -32767;
+		}
+
+		if (gate_snare_seq && !read_bit(sequence[prev_seq_index], 1)) {
+			trigger_snare_seq = 32767;
+		}
+		else if (!gate_snare_seq && read_bit(sequence[prev_seq_index], 1)) {
+			trigger_snare_seq = -32767;
+		}
+
+		if (gate_hihat_seq && !read_bit(sequence[prev_seq_index], 2)) {
+			trigger_hihat_seq = 32767;
+		}
+		else if (!gate_hihat_seq && read_bit(sequence[prev_seq_index], 2)) {
+			trigger_hihat_seq = -32767;
+		}
+
+		if (gate_clap_seq && !read_bit(sequence[prev_seq_index], 3)) {
+			trigger_clap_seq = 32767;
+		}
+		else if (!gate_clap_seq && read_bit(sequence[prev_seq_index], 3)) {
+			trigger_clap_seq = -32767;
+		}
+	}
+
+
 	int32_t sample = 0;
-	int16_t gate = 0;
+
+
 	int16_t gate_kick = 0;
 	int16_t gate_snare = 0;
 	int16_t gate_hihat = 0;
 	int16_t gate_clap = 0;
-	int16_t gate_cowbell = 0;
-	int16_t trigger = 0;
+
 	int16_t trigger_kick = 0;
 	int16_t trigger_snare = 0;
 	int16_t trigger_hihat = 0;
 	int16_t trigger_clap = 0;
-	int16_t trigger_cowbell = 0;
 
 
-	// onboard button
-	if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_13) == GPIO_PIN_RESET) {
-	    // Button is pressed (logic 0)
 
-		gate = 32767;
-		if (button.prev_state == 0) {
-			trigger = 32767;
+
+		// button 1, kick
+		if (button_state[0]) {
+		    // Button is pressed (logic 0)
+
+			gate_kick = 32767;
+			if (button1.prev_state == 0) {
+				trigger_kick = 32767;
+			}
 		}
-	}
-	else {
-	    // Button is not pressed (logic 1)
-
-	}
-
-
-	// button 1, kick
-	if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_6) == GPIO_PIN_RESET) {
-	    // Button is pressed (logic 0)
-
-		gate_kick = 32767;
-		if (button1.prev_state == 0) {
-			trigger_kick = 32767;
+		else {
+		    // Button is not pressed (logic 1)
+			if (button1.prev_state > 0) {
+				//if button was on last tick, but off now
+				trigger_kick = -32767;
+			}
 		}
-	}
-	else {
-	    // Button is not pressed (logic 1)
 
-		if (button1.prev_state > 0) {
-			//if button was on last tick, but off now
-			trigger_kick = -32767;
+
+		// button 2, snare
+		if (button_state[1]) {
+
+		    // Button is pressed (logic 0)
+			gate_snare = 32767;
+			sequence[seq_index] = set_bit(sequence[seq_index], 1, 1);
+			if (button2.prev_state == 0) {
+
+				trigger_snare = 32767;
+			}
 		}
-	}
+		else {
+		    // Button is not pressed (logic 1)
+			if (button2.prev_state > 0) {
 
-
-	// button 2, snare
-	if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_7) == GPIO_PIN_RESET) {
-
-	    // Button is pressed (logic 0)
-		gate_snare = 32767;
-		if (button2.prev_state == 0) {
-
-			trigger_snare = 32767;
+				//if button was on last tick, but off now
+				trigger_snare = -32767;
+			}
 		}
-	}
-	else {
-	    // Button is not pressed (logic 1)
 
-		if (button2.prev_state > 0) {
+		//button 3, hihat
+		if (button_state[2]) {
+		    // Button is pressed (logic 0)
 
-			//if button was on last tick, but off now
-			trigger_snare = -32767;
+			gate_hihat = 32767;
+			if (button3.prev_state == 0) {
+	//			printf("hello\n");
+				trigger_hihat = 32767;
+			}
 		}
-	}
-
-	//button 3, hihat
-	if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_9) == GPIO_PIN_RESET) {
-	    // Button is pressed (logic 0)
-
-		gate_hihat = 32767;
-		if (button3.prev_state == 0) {
-//			printf("hello\n");
-			trigger_hihat = 32767;
+		else {
+		    // Button is not pressed (logic 1)
+			if (button3.prev_state > 0) {
+				//if button was on last tick, but off now
+				trigger_hihat = -32767;
+			}
 		}
-	}
-	else {
-	    // Button is not pressed (logic 1)
-		if (button3.prev_state > 0) {
-			//if button was on last tick, but off now
-			trigger_hihat = -32767;
+
+		// button 4, clap
+		if (button_state[3]) {
+		    // Button is pressed (logic 0)
+
+			gate_clap = 32767;
+			if (button4.prev_state == 0) {
+				trigger_clap = 32767;
+			}
 		}
-	}
-
-	// button 4, clap
-	if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_8) == GPIO_PIN_RESET) {
-	    // Button is pressed (logic 0)
-
-		gate_clap = 32767;
-		if (button4.prev_state == 0) {
-			trigger_clap = 32767;
+		else {
+		    // Button is not pressed (logic 1)
+			if (button4.prev_state > 0) {
+				//if button was on last tick, but off now
+				trigger_clap = -32767;
+			}
 		}
-	}
-	else {
-	    // Button is not pressed (logic 1)
-		if (button4.prev_state > 0) {
-			//if button was on last tick, but off now
-			trigger_clap = -32767;
-		}
-	}
-
-	//button 5, cowbell
-	if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_10) == GPIO_PIN_RESET) {
-	    // Button is pressed (logic 0)
-
-		gate_cowbell = 32767;
-		if (button5.prev_state == 0) {
-			trigger_cowbell = 32767;
-		}
-	}
-	else {
-	    // Button is not pressed (logic 1)
-		if (button5.prev_state > 0) {
-			//if button was on last tick, but off now
-			trigger_cowbell = -32767;
-		}
-	}
 
 
-	sample = kick_sample(gate_kick, trigger_kick) >> 1;
-	sample += snare_sample(gate_snare, trigger_snare) >> 1;
+
+	sample = kick_sample(gate_kick, trigger_kick);
+	sample += kick_sample(gate_kick_seq, trigger_kick_seq);
+
+	sample += snare_sample(gate_snare, trigger_snare) >> 2;
+	sample += snare_sample(gate_snare_seq, trigger_snare_seq) >> 2;
+
 	sample += hihat_sample(gate_hihat, trigger_hihat) >> 1;
+	sample += hihat_sample(gate_hihat_seq, trigger_hihat_seq) >> 1;
+
 	sample += clap_sample(gate_clap, trigger_clap) >> 1;
-	sample += cowbell_sample(gate_cowbell, trigger_cowbell) >> 1;
+	sample += clap_sample(gate_clap_seq, trigger_clap_seq) >> 1;
 
 
 
-	button.prev_state = gate;
 	button1.prev_state = gate_kick;
 	button2.prev_state = gate_snare;
 	button3.prev_state = gate_hihat;
 	button4.prev_state = gate_clap;
-	button5.prev_state = gate_cowbell;
+
+	if (currently_recording) {
+
+		sequence[seq_index] = set_bit(sequence[seq_index], 0, gate_kick>0);
+		sequence[seq_index] = set_bit(sequence[seq_index], 1, gate_snare>0);
+		sequence[seq_index] = set_bit(sequence[seq_index], 2, gate_hihat>0);
+		sequence[seq_index] = set_bit(sequence[seq_index], 3, gate_clap>0);
+	}
+	count++;
 	return sample;
 }
 
@@ -256,8 +349,8 @@ void knob_1(int16_t value) {
 // value is 12 bit, from 0-4095
 
 
-// scales to range of 80, and adds 40 to get between 40-120Hz
-	int16_t new_frequency = ((value * 80) / 4095) + 40;
+// scales to range of 80, and adds 40 to get between 20-120Hz
+	int16_t new_frequency = ((value * 100) / 4095) + 20;
 
 
 // frequency range between 40-120 Hz
@@ -276,7 +369,7 @@ void knob_2(int16_t value) {
 	// therefore in samples we want between 48-24000
 	// so a range of 23952
 
-	int32_t new_attack_samples = ((int32_t)(value * 23952) / 4095) + 48;
+//	int32_t new_attack_samples = ((int32_t)(value * 23952) / 4095) + 48;
 	int32_t new_attack_samples = exp((float)value / 300.0f) + 40;
 	if (new_attack_samples > 32767) new_attack_samples = 32767;
 	else if (new_attack_samples < 0) new_attack_samples = 0;
@@ -339,6 +432,7 @@ int16_t generate_sample(int16_t *adc_values, int16_t adc_values_size) {
 
 
 	sample = synth_from_button();
+
 	int16_t sample_16bit;
 	if (sample > 32767) sample_16bit = 32767;
 	else if (sample < -32767) sample_16bit = -32767;
